@@ -81,6 +81,21 @@ def test_pr_on_feature_branch_compares_with_base(git_repo, git):
     assert "main...HEAD" in changes.source
     assert [(f.status, f.path) for f in changes.files] == [("A", "app.py")]
     assert "+print('x')" in changes.diff
+    assert changes.files_from == "Git diff --name-status" and changes.pending == []
+
+
+def test_pr_compare_reports_uncommitted(git_repo, git):
+    git("switch", "-q", "-c", "feature/y")
+    (git_repo / "app.py").write_text("print('y')\n", encoding="utf-8")
+    git("add", "app.py")
+    git("commit", "-q", "-m", "add app")
+    (git_repo / "wip.txt").write_text("not committed\n", encoding="utf-8")
+
+    changes = collect_pr_changes("main")
+
+    assert [f.path for f in changes.files] == ["app.py"]
+    assert [f.path for f in changes.pending] == ["wip.txt"]
+    assert "wip" not in changes.diff
 
 
 def test_pr_on_base_uses_uncommitted(git_repo):

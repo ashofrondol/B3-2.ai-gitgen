@@ -148,12 +148,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     log("INFO", f"현재 브랜치: {changes.branch}")
-    log("INFO", f"Git status 수집 완료: {len(changes.files)}개 파일 변경 감지")
+    log("INFO", f"{changes.files_from} 수집 완료: {len(changes.files)}개 파일 변경 감지")
     for f in changes.files[:MAX_LOGGED_FILES]:
         print(f"        {f.status}  {f.path}", file=sys.stderr)
     if len(changes.files) > MAX_LOGGED_FILES:
         print(f"        ... 외 {len(changes.files) - MAX_LOGGED_FILES}개", file=sys.stderr)
     log("INFO", f"Git diff 수집 완료: {changes.diff_line_count}줄 · {changes.source}")
+    if changes.pending:
+        log("WARN", f"커밋되지 않은 변경 {len(changes.pending)}개는 브랜치 비교에 들어가지 않습니다. "
+                    "PR 에 넣으려면 먼저 커밋하세요.")
 
     if changes.is_empty:
         log("INFO", f"변경 사항이 없습니다. {WHAT_OBJECT[command]} 생성하지 않고 종료합니다.")

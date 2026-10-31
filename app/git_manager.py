@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 STATUS_LABELS = {
     "M": "수정",
@@ -40,6 +40,8 @@ class GitChanges:
     files: list[FileChange]
     diff: str
     source: str  # 어떤 범위를 diff 했는지 사람이 읽는 설명
+    files_from: str = "Git status"  # 파일 목록을 어디서 얻었는지
+    pending: list[FileChange] = field(default_factory=list)  # 비교에 안 들어간 미커밋 변경
 
     @property
     def diff_line_count(self) -> int:
@@ -156,7 +158,8 @@ def collect_pr_changes(base: str = "main", cwd: str | None = None) -> GitChanges
     if branch != base and has_ref(base, cwd):
         diff = run_git(["diff", "--no-color", f"{base}...HEAD"], cwd)
         names = run_git(["diff", "--name-status", "-z", f"{base}...HEAD"], cwd)
-        return GitChanges(branch, _parse_name_status(names), diff, f"브랜치 비교 (git diff {base}...HEAD)")
+        return GitChanges(branch, _parse_name_status(names), diff, f"브랜치 비교 (git diff {base}...HEAD)",
+                          files_from="Git diff --name-status", pending=collect_status(cwd))
     if has_ref("HEAD", cwd):
         diff = run_git(["diff", "--no-color", "HEAD"], cwd)
     else:
