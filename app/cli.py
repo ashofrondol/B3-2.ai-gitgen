@@ -18,9 +18,9 @@ from app.config import (
     load_env,
     read_api_settings,
 )
-from app.formatter import enforce_commit, enforce_pr, format_commit, format_pr
+from app.formatter import enforce_commit, enforce_pr, format_commit, format_pr, validate_commit
 from app.git_manager import GitError, collect_commit_changes, collect_pr_changes, ensure_repo_root
-from app.prompts import build_commit_prompt, build_pr_prompt
+from app.prompts import build_commit_prompt, build_pr_prompt, build_retry_prompt
 from app.safety import apply_safe_mode, cap_diff, count_sensitive
 
 LINE = "----------------------"
@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="응답 최대 토큰 수 (기본: commit 400 / pr 1000)")
     group.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
                        help=f"요청 제한 시간(초) (기본: {DEFAULT_TIMEOUT:g})")
+    group.add_argument("--no-retry", action="store_true",
+                       help="형식 위반이어도 다시 생성하지 않고 후처리만 (호출 1회 고정)")
     safe = common.add_argument_group("안전 모드")
     safe.add_argument("--safe-mode", action="store_true",
                       help="민감 파일 제외 + 키·이메일 등 마스킹 + 전송량 제한")
@@ -158,28 +160,41 @@ def main(argv: list[str] | None = None) -> int:
 
     log("INFO", f"AI API 요청 중... (model={settings.model}, temperature={temperature:g}, "
                 f"max_tokens={max_tokens})")
-    calls = 0
-    try:
-        calls += 1
-        completion = client.complete(prompt.system, prompt.user)
-    except AIClientError as exc:
-        log_error(exc)
-        log("INFO", f"AI API 호출 횟수: {calls}회")
-        return 1
-    if completion.truncated:
-        log("WARN", f"응답이 max_tokens({max_tokens}) 에서 잘렸습니다. --max-tokens 값을 늘려 보세요.")
+    # 형식 위반이면 1회만 다시 생성한다 (실행당 최대 2회 호출). --no-retry 면 후처리만.
+    max_calls = 1 if args.no_retry else 2
+    calls, tokens_in, tokens_out = 0, 0, 0
+    request = prompt
+    while True:
+        try:
+            calls += 1
+            completion = client.complete(request.system, request.user)
+        except AIClientError as exc:
+            log_error(exc)
+            log("INFO", f"AI API 호출 횟수: {calls}회")
+            return 1
+        tokens_in += completion.prompt_tokens or 0
+        tokens_out += completion.completion_tokens or 0
+        if completion.truncated:
+            log("WARN", f"응답이 max_tokens({max_tokens}) 에서 잘렸습니다. --max-tokens 값을 늘려 보세요.")
 
-    result = format_commit(completion.text) if command == "commit" else format_pr(completion.text)
-    value = result.value
-    if result.issues:
+        result = format_commit(completion.text) if command == "commit" else format_pr(completion.text)
+        value = result.value
+        if not result.issues:
+            break
+        if calls < max_calls:
+            log("WARN", f"형식 규칙 위반 {len(result.issues)}건 → 1회 다시 생성합니다: "
+                        + "; ".join(result.issues))
+            request = build_retry_prompt(prompt, completion.text, result.issues)
+            continue
         value, fixes = enforce_commit(value) if command == "commit" else enforce_pr(value)
         for note in fixes:
             log("WARN", f"후처리로 보정했습니다: {note}")
+        if command == "commit":  # 잘라 낸 제목도 권장 길이·접두어 경고는 다시 본다
+            result.warnings = validate_commit(value)[1]
+        break
 
     log("DONE", f"{WHAT[command]} 생성 완료")
-    usage = ""
-    if completion.prompt_tokens is not None and completion.completion_tokens is not None:
-        usage = f" · 토큰 입력 {completion.prompt_tokens} / 출력 {completion.completion_tokens}"
+    usage = f" · 토큰 입력 {tokens_in} / 출력 {tokens_out}" if tokens_in or tokens_out else ""
     log("INFO", f"AI API 호출 횟수: {calls}회{usage}")
     for warning in result.warnings:
         log("WARN", warning)
