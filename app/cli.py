@@ -21,7 +21,7 @@ from app.config import (
 from app.formatter import enforce_commit, enforce_pr, format_commit, format_pr, validate_commit
 from app.git_manager import GitError, collect_commit_changes, collect_pr_changes, ensure_repo_root
 from app.prompts import build_commit_prompt, build_pr_prompt, build_retry_prompt
-from app.safety import apply_safe_mode, cap_diff, count_sensitive
+from app.safety import apply_safe_mode, cap_diff, count_sensitive, is_sensitive_path, split_sections
 
 LINE = "----------------------"
 MAX_LOGGED_FILES = 20
@@ -51,6 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help=f"요청 제한 시간(초) (기본: {DEFAULT_TIMEOUT:g})")
     group.add_argument("--no-retry", action="store_true",
                        help="형식 위반이어도 다시 생성하지 않고 후처리만 (호출 1회 고정)")
+    group.add_argument("--dry-run", action="store_true",
+                       help="AI 를 호출하지 않고 보낼 프롬프트만 출력 (API Key 불필요)")
     safe = common.add_argument_group("안전 모드")
     safe.add_argument("--safe-mode", action="store_true",
                       help="민감 파일 제외 + 키·이메일 등 마스킹 + 전송량 제한")
@@ -98,10 +100,13 @@ def prepare_diff(args: argparse.Namespace, diff: str) -> tuple[str, list[str]]:
             notes.append(f"민감 파일 diff 제외: {', '.join(report.excluded_files)}")
         if report.truncated:
             notes.append("diff 일부만 보냈습니다. 잘린 부분은 추측하지 마세요.")
-    else:
+    else:  # 끄면 가리지는 않지만, 보이면 알려 준다
         found = count_sensitive(diff)
+        risky = [path for path, _ in split_sections(diff) if path and is_sensitive_path(path)]
         if found:
             log("WARN", f"diff 에서 민감정보로 보이는 패턴 {found}건을 찾았습니다. --safe-mode 사용을 권장합니다.")
+        if risky:
+            log("WARN", f"민감 파일 diff 가 포함돼 있습니다: {', '.join(risky)} (--safe-mode 면 제외)")
     diff, capped = cap_diff(diff)
     if capped:
         log("WARN", "diff 가 길어 앞부분만 보냅니다.")
@@ -124,13 +129,15 @@ def main(argv: list[str] | None = None) -> int:
     temperature = defaults.temperature if args.temperature is None else args.temperature
     max_tokens = args.max_tokens or defaults.max_tokens
 
-    # 설정 오류(API Key 없음)는 Git 작업보다 먼저 알린다.
-    try:
-        client = AIClient(settings.api_key, settings.base_url, settings.model,
-                          temperature, max_tokens, timeout=args.timeout)
-    except AIClientError as exc:
-        log_error(exc)
-        return 2
+    # 설정 오류(API Key 없음)는 Git 작업보다 먼저 알린다. --dry-run 은 키가 필요 없다.
+    client = None
+    if not args.dry_run:
+        try:
+            client = AIClient(settings.api_key, settings.base_url, settings.model,
+                              temperature, max_tokens, timeout=args.timeout)
+        except AIClientError as exc:
+            log_error(exc)
+            return 2
 
     try:
         ensure_repo_root()
@@ -158,7 +165,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         prompt = build_pr_prompt(changes, diff, notes, args.base)
 
-    log("INFO", f"AI API 요청 중... (model={settings.model}, temperature={temperature:g}, "
+    if client is None:  # --dry-run
+        print(f"--- System Prompt ---\n{prompt.system}\n--- User Prompt ---\n{prompt.user}\n{LINE}",
+              flush=True)
+        log("INFO", "--dry-run: AI API 를 호출하지 않았습니다 (호출 0회)")
+        return 0
+
+    log("INFO",f"AI API 요청 중... (model={settings.model}, temperature={temperature:g}, "
                 f"max_tokens={max_tokens})")
     # 형식 위반이면 1회만 다시 생성한다 (실행당 최대 2회 호출). --no-retry 면 후처리만.
     max_calls = 1 if args.no_retry else 2
