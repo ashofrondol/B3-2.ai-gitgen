@@ -119,6 +119,29 @@ def test_bad_body_and_empty_content():
     assert "--max-tokens" in err.value.hint
 
 
+def test_load_env_priority(tmp_path, monkeypatch):
+    import app.config as config
+
+    for name in ("API_KEY", "MODEL", "BASE_URL"):
+        monkeypatch.setenv(name, "x")  # 테스트 뒤 원래 상태(없음)로 되돌리게 기록
+        monkeypatch.delenv(name)
+    tool_dir, work_dir = tmp_path / "tool", tmp_path / "work"
+    tool_dir.mkdir()
+    work_dir.mkdir()
+    (tool_dir / ".env").write_text("API_KEY=from-tool\nMODEL=tool-model\n", encoding="utf-8")
+    (work_dir / ".env").write_text("API_KEY=from-work\n", encoding="utf-8")
+    monkeypatch.setattr(config, "TOOL_ENV", str(tool_dir / ".env"))
+    monkeypatch.setenv("BASE_URL", "https://shell.example/v1")
+    monkeypatch.chdir(work_dir)
+
+    config.load_env()
+    settings = read_api_settings()
+
+    assert settings.api_key == "from-work"         # 현재 폴더 .env 가 도구 폴더보다 우선
+    assert settings.model == "tool-model"          # 현재 폴더에 없으면 도구 폴더 값
+    assert settings.base_url == "https://shell.example/v1"  # 셸 환경변수가 가장 우선
+
+
 def test_read_api_settings(monkeypatch):
     monkeypatch.setenv("API_KEY", " k ")
     monkeypatch.setenv("BASE_URL", "  ")

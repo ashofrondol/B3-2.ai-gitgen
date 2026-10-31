@@ -42,10 +42,18 @@ class ApiSettings:
     model: str
 
 
+TOOL_ENV = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+
+
 def load_env(path: str = ".env") -> None:
-    """.env 가 있으면 읽는다. 이미 설정된 환경변수가 우선한다."""
-    if os.path.isfile(path):
-        load_dotenv(path, override=False)
+    """현재 폴더의 .env, 그다음 도구 폴더의 .env 를 읽는다. 먼저 정해진 값이 이긴다.
+
+    셸 환경변수 > 현재 폴더 .env > 도구 폴더 .env 순서. 다른 저장소 루트에서
+    `python /경로/main.py commit` 으로 불러도 도구 폴더에 둔 키를 쓸 수 있다.
+    """
+    for candidate in dict.fromkeys((os.path.abspath(path), TOOL_ENV)):
+        if os.path.isfile(candidate):
+            load_dotenv(candidate, override=False)
 
 
 def _env(name: str) -> str | None:
