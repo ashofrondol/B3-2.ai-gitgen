@@ -26,6 +26,7 @@ from app.safety import apply_safe_mode, cap_diff, count_sensitive, is_sensitive_
 LINE = "----------------------"
 MAX_LOGGED_FILES = 20
 WHAT = {"commit": "커밋 메시지", "pr": "PR 초안"}
+WHAT_OBJECT = {"commit": "커밋 메시지를", "pr": "PR 초안을"}  # 조사까지 붙인 목적어
 
 
 def log(level: str, message: str) -> None:
@@ -155,8 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     log("INFO", f"Git diff 수집 완료: {changes.diff_line_count}줄 · {changes.source}")
 
     if changes.is_empty:
-        log("INFO", f"변경 사항이 없습니다. {WHAT[command]}{'를' if command == 'commit' else '을'} "
-                    "생성하지 않고 종료합니다.")
+        log("INFO", f"변경 사항이 없습니다. {WHAT_OBJECT[command]} 생성하지 않고 종료합니다.")
         return 0
 
     diff, notes = prepare_diff(args, changes.diff)
@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         log("INFO", "--dry-run: AI API 를 호출하지 않았습니다 (호출 0회)")
         return 0
 
-    log("INFO",f"AI API 요청 중... (model={settings.model}, temperature={temperature:g}, "
+    log("INFO", f"AI API 요청 중... (model={settings.model}, temperature={temperature:g}, "
                 f"max_tokens={max_tokens})")
     # 형식 위반이면 1회만 다시 생성한다 (실행당 최대 2회 호출). --no-retry 면 후처리만.
     max_calls = 1 if args.no_retry else 2
