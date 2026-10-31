@@ -12,6 +12,14 @@ def _git(*args: str) -> str:
     return proc.stdout
 
 
+@pytest.fixture(autouse=True)
+def _ignore_tool_env(monkeypatch, tmp_path):
+    """개발자가 도구 폴더에 둔 실제 .env(키)를 테스트가 읽지 않게 한다."""
+    import app.config
+
+    monkeypatch.setattr(app.config, "TOOL_ENV", str(tmp_path / "no-such.env"))
+
+
 @pytest.fixture
 def git():
     """현재 디렉터리에서 git 을 실행하는 함수."""
